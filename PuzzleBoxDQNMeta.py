@@ -31,12 +31,14 @@ from matplotlib import pyplot as plt
         #self.net = nn.Sequential(*[nn.Sequential(nn.Linear(layers[i])) for i in range(1, len(layers))])
 
 BUFFER_SIZE = int(1e5)  #replay buffer size
-BATCH_SIZE = 16         # minibatch size
+BATCH_SIZE = 64         # minibatch size
 GAMMA = 0.99            # discount factor
-TAU = 1e-2              # for soft update of target parameters
+TAU = 1e-3              # for soft update of target parameters
 
-LR = 3e-4               # learning rate
-TAU = LR
+LR = 5e-4               # learning rate
+ALPHA = 1e-3
+# ALPHA = 1
+# TAU = LR
 UPDATE_EVERY = 2        # how often to update the network
 
 
@@ -183,7 +185,7 @@ class QNetwork(nn.Module):
 class Agent():
     """Interacts with and learns form environment."""
     
-    def __init__(self, state_size, action_size, seed, meta_learn_k = 1, savepath='checkpoint.pth',load=False, loadpath='checkpoint.pth'):
+    def __init__(self, state_size, action_size, seed, meta_learn_k = 1, num_tasks = 1, savepath='checkpoint.pth',load=False, loadpath='checkpoint.pth'):
         """Initialize an Agent object.
         
         Params
@@ -196,7 +198,9 @@ class Agent():
         self.state_size = state_size
         self.action_size = action_size
         self.seed = random.seed(seed)
+        self.seed = seed
         self.meta_learn_k = meta_learn_k
+        self.num_tasks = num_tasks
         
         
         #Q- Network
@@ -231,27 +235,29 @@ class Agent():
         self.optimizer = optim.Adam(self.qnetwork_local.parameters(),lr=LR)
         
         # Replay memory 
-        self.memory = ReplayBuffer(action_size, BUFFER_SIZE,BATCH_SIZE,seed)
+        self.memory = []
+        for i in range(self.num_tasks):
+            self.memory.append(ReplayBuffer(action_size, BUFFER_SIZE,BATCH_SIZE,seed))
+        self.ep_len = np.zeros(self.num_tasks,dtype=int)
+
         # Initialize time step (for updating every UPDATE_EVERY steps)
         self.t_step = 0
         
-    def step(self, state, action, reward, next_step, done, t):
+    def step(self, state, action, reward, next_step, done, t,task_num):
         # Save experience in replay memory
-        self.memory.add(state, action, reward, next_step, done)
+        # if done:
+        #     self.ep_len[task_num] = t
+        self.memory[task_num].add(state, action, reward, next_step, done)
 
-        # Learn every UPDATE_EVERY time steps.
-        if self.meta_learn_k > 1:
-            if done:
-                experience = self.memory.meta_learn_sample(t)
-                self.learn(experience,GAMMA)
-        else:
-            self.t_step = (self.t_step+1)% UPDATE_EVERY
-            if self.t_step == 0:
-                # If enough samples are available in memory, get radom subset and learn
+        # # Learn every UPDATE_EVERY time steps.
+   
+        self.t_step = (self.t_step+1)% UPDATE_EVERY
+        if self.t_step == 0:
+            # If enough samples are available in memory, get radom subset and learn
 
-                if len(self.memory)>BATCH_SIZE:
-                    experience = self.memory.sample()
-                    self.learn(experience, GAMMA)
+            # if len(self.memory)>BATCH_SIZE:
+                # experience = self.memory.sample()
+            self.learn(GAMMA)
     def act(self, state, eps = 0):
         """Returns action for given state as per current policy
 
@@ -273,7 +279,7 @@ class Agent():
         else:
             return random.choice(np.arange(self.action_size))
             
-    def learn(self, experiences, gamma):
+    def learn(self, gamma):
         """Update value parameters using given batch of experience tuples.
 
         Params
@@ -283,8 +289,7 @@ class Agent():
 
             gamma (float): discount factor
         """
-        states, actions, rewards, next_state, dones = experiences
-        batch_size = len(states)
+        
         ## TODO: compute and minimize the loss
         criterion = torch.nn.MSELoss()
         # Local model is one which we need to train so it's in training mode
@@ -296,30 +301,53 @@ class Agent():
         #shape of output from the model (batch_size,action_dim) = (64,4)
         # print(self.qnetwork_local(self.data_graph(states)).shape)
         # import pdb; pdb.set_trace()
-
-        for i in range(self.meta_learn_k):
-            # print("Targets")
-            # print(states.shape)
-            predicted_targets = self.qnetwork_local(self.data_graph(states)).view(batch_size, -1, 1).gather(1, actions.unsqueeze(1))
+        fine_models = []
+        for task_num in range(self.num_tasks):
+            # print("TASK NUM " + str(task_num))
             
-            with torch.no_grad():
-                # import pdb; pdb.set_trace()
-                # labels_next = self.qnetwork_target(self.data_graph(next_state)).detach().max(1)[0].unsqueeze(1)
-                # print("Labels")
-                # print(next_state.shape)
-                labels_next = self.qnetwork_target(self.data_graph(next_state)).detach().view(batch_size, -1, 1).max(dim=1)[0].unsqueeze(1)
-            # .detach() ->  Returns a new Tensor, detached from the current graph.
+                # print("Targets")
+                # print(states.shape)
+            if len(self.memory[task_num]) < BATCH_SIZE:
+                continue
+            
 
-            labels = rewards.unsqueeze(1) + (gamma* labels_next*(1-dones.unsqueeze(1)))
+            fine_model = QNetwork(self.state_size, self.action_size, self.seed).to(device)
+            fine_model.load_state_dict(self.qnetwork_local.state_dict())
+            optimizer = optim.Adam(fine_model.parameters(),lr=LR)
+            for i in range(self.meta_learn_k):
 
-            loss = criterion(predicted_targets,labels).to(device)
-            # print(loss.item())
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+                experiences = self.memory[task_num].sample()
+                states, actions, rewards, next_state, dones = experiences
+                batch_size = len(states)
+
+                predicted_targets = fine_model(self.data_graph(states)).view(batch_size, -1, 1).gather(1, actions.unsqueeze(1))
+                
+                with torch.no_grad():
+                    # import pdb; pdb.set_trace()
+                    # labels_next = self.qnetwork_target(self.data_graph(next_state)).detach().max(1)[0].unsqueeze(1)
+                    # print("Labels")
+                    # print(next_state.shape)
+                    labels_next = self.qnetwork_target(self.data_graph(next_state)).detach().view(batch_size, -1, 1).max(dim=1)[0].unsqueeze(1)
+                # .detach() ->  Returns a new Tensor, detached from the current graph.
+
+                labels = rewards.unsqueeze(1) + (gamma* labels_next*(1-dones.unsqueeze(1)))
+
+                loss = criterion(predicted_targets,labels).to(device)
+                # print(loss.item())
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            fine_models.append(fine_model)
+        self.meta_update(self.qnetwork_local,fine_models,ALPHA)
 
         # ------------------- update target network ------------------- #
         self.soft_update(self.qnetwork_local,self.qnetwork_target,TAU)
+
+    def meta_update(self, local_model, fine_models, lr):
+        for model in fine_models:
+            for local_param, fine_param in zip(local_model.parameters(),model.parameters()):
+                local_param.data.copy_(local_param + lr/self.num_tasks*(fine_param-local_param))
             
     def soft_update(self, local_model, target_model, tau):
         """Soft update model parameters.
@@ -358,7 +386,6 @@ class Agent():
         # import pdb; pdb.set_trace()
         batch = Batch.from_data_list([Data(x=xs[i], edge_index=self.edge_index, edge_attr=edge_attrs[i]) for i in range(xs.shape[0])])
         # data = Data(x=x, edge_index = self.edge_index)
-        batch.to(device)
         return(batch)
 
             
@@ -425,7 +452,7 @@ class ReplayBuffer:
 
 
 
-def dqn(agent,n_train_envs,n_episodes= 200, max_t = 100, eps_start=1.0, eps_end = 0.01,
+def dqn(agent,n_train_envs,n_episodes= 200, max_t = 1000, eps_start=1.0, eps_end = 0.01,
        eps_decay=0.999):
     # print(n_episodes)
     """Deep Q-Learning
@@ -442,18 +469,9 @@ def dqn(agent,n_train_envs,n_episodes= 200, max_t = 100, eps_start=1.0, eps_end 
     scores = [] # list containing score from each episode
     scores_window = deque(maxlen=50) # last 100 scores
     eps = eps_start
-    total_actions = 0
     for i_episode in range(1, n_episodes+1):
 
-        env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = 2,return_state_mode='mf',randomize_config=False)
-        locations = np.array([[24.0653,-7.0341,-1,-0.0239],
-                              [18.0313,-7.2389,-1,-0.0230],
-                              [10.4267,-6.9789,-1,-0.0187],
-                              [11.4360,0.7323,0.0090,-1],
-                              [11.4134,7.5497,0.0568,-0.9984]])
-        env.set_locations(locations)
-        # env = PuzzleBoxEnv.CompEnv()
-
+        env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = (i_episode-1)%n_train_envs,return_state_mode='mf',randomize_config=True)
         _,state,_,_ = env.reset()
         score = 0
         for t in range(max_t):
@@ -461,8 +479,7 @@ def dqn(agent,n_train_envs,n_episodes= 200, max_t = 100, eps_start=1.0, eps_end 
             _,next_state,reward,done = env.step(action)
             # print("next_state")
             # print(next_state.shape)
-
-            agent.step(state,action,reward,next_state,done,t)
+            agent.step(state,action,reward,next_state,done,t,(i_episode-1)%n_train_envs)
             ## above step decides whether we will train(learn) the network
             ## actor (local_qnetwork) or we will fill the replay buffer
             ## if len replay buffer is equal to the batch size then we will
@@ -470,75 +487,25 @@ def dqn(agent,n_train_envs,n_episodes= 200, max_t = 100, eps_start=1.0, eps_end 
             ## replay buffer.
             state = next_state
             score += reward
-            total_actions += 1
-            if total_actions %120==0:
-                quick_eval(agent,8,eps)
             if done:
                 break
-            if total_actions > 120*5:
-                break
-        if total_actions > 120*5:
-            torch.save(agent.qnetwork_local.state_dict(),'Real_Robot_DQN_Model.pth')
-            break
+        # if (i_episode-1)%n_train_envs == 0 and i_episode > 1:
+        #     agent.learn(GAMMA)
         scores_window.append(score) ## save the most recent score
         scores.append(score) ## save the most recent score
         eps = max(eps*eps_decay,eps_end)## decrease the epsilon
         print('\rEpisode {}\tAverage Score {:.2f}\t epsilon {:.2f}'.format(i_episode,np.mean(scores_window),eps), end="")
-        if i_episode %40==0:
+        if i_episode %50==0:
             print('\rEpisode {}\tAverage Score {:.2f}\t epsilon {:.2f}'.format(i_episode,np.mean(scores_window),eps))
             
             torch.save(agent.qnetwork_local.state_dict(),'checkpoint.pth')
-        
                 
     return scores
 
-def quick_eval(agent,eps,env_index = 8, locations = None):
-    total_score = 0
-    if not np.any(locations):
-        locations = np.array([[23.0993,-0.1519,0.6930,0.7210],
-                              [16.5110,-4.7502,0.6710,-0.7415],
-                              [12.8176,-9.8099,0.0359,-0.9993],
-                              [10.6856,-4.1045,0.0253,-1.0000],
-                              [11.1199,1.9743,0.0763,-0.9971],])
-    for i in range(5):
-        env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = env_index,return_state_mode='mf',randomize_config=False)
-        env.set_locations(locations)
-        # env = PuzzleBoxEnv.CompEnv()
-
-        _,state,_,_ = env.reset()
-        score = 0
-        for t in range(200):
-            action = agent.act(state,eps)
-            _,next_state,reward,done = env.step(action)
-            # print("next_state")
-            # print(next_state.shape)
-
-            # agent.step(state,action,reward,next_state,done,t)
-            ## above step decides whether we will train(learn) the network
-            ## actor (local_qnetwork) or we will fill the replay buffer
-            ## if len replay buffer is equal to the batch size then we will
-            ## train the network or otherwise we will add experience tuple in our 
-            ## replay buffer.
-            state = next_state
-            score += reward
-            if done:
-                break
-        print(t+1)
-        total_score += np.min([t+1,30])
-
-    print(total_score/5)
-
-
 def main():
-    agent = Agent(state_size=35,action_size=5,seed=2,meta_learn_k = 1,loadpath='models/DQNModel92000.pth',load = True)
-    # quick_eval(agent,.1)
-    locations = np.array([[24.0653,-7.0341,-1,-0.0239],
-                          [18.0313,-7.2389,-1,-0.0230],
-                          [10.4267,-6.9789,-1,-0.0187],
-                          [11.4360,0.7323,0.0090,-1],
-                          [11.4134,7.5497,0.0568,-0.9984]])
-    quick_eval(agent,.1,env_index = 2,locations = locations)
-    # scores= dqn(agent,1,n_episodes=2000, eps_end = .2, eps_decay = .9)
+    num_tasks = 1
+    agent = Agent(state_size=35,action_size=5,seed=0,meta_learn_k = 1,num_tasks=num_tasks)
+    scores= dqn(agent,num_tasks,n_episodes=2000, eps_end = .2, eps_decay = .99)
 
     mean_scores = []
     for i in range(100,len(scores)):

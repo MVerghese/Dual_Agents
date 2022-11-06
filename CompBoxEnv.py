@@ -274,21 +274,21 @@ comp_small_env_1[4,0,7,0] = 1
 comp_small_env_1[5,0,7,0] = 1
 comp_small_env_1[6,0,7,0] = 1
 
-poses_1 = np.zeros((8,9))
-poses_1[0,:] = augment_3D_locations([0,0,0,0,0,0])
-poses_1[1,:] = augment_3D_locations([0,0,-37,0,0,0])
-poses_1[2,:] = augment_3D_locations([-23,2,-20,0,0,np.pi/2])
-poses_1[3,:] = augment_3D_locations([-11,-14,-7,0,0,np.pi/2])
-poses_1[4,:] = augment_3D_locations([-17,-14,-7,0,0,np.pi/2])
-poses_1[5,:] = augment_3D_locations([-18,-14,-7,0,0,np.pi/2])
-poses_1[6,:] = augment_3D_locations([-10,-5,-18.5,0,0,np.pi/2])
-poses_1[7,:] = augment_3D_locations([-12,-15,-10,0,0,np.pi/2])
+poses_0 = np.zeros((8,9))
+poses_0[0,:] = augment_3D_locations([0,0,0,0,0,0])
+poses_0[1,:] = augment_3D_locations([0,0,-37,0,0,0])
+poses_0[2,:] = augment_3D_locations([-23,2,-20,0,0,np.pi/2])
+poses_0[3,:] = augment_3D_locations([-11,-14,-7,0,0,np.pi/2])
+poses_0[4,:] = augment_3D_locations([-17,-14,-7,0,0,np.pi/2])
+poses_0[5,:] = augment_3D_locations([-18,-14,-7,0,0,np.pi/2])
+poses_0[6,:] = augment_3D_locations([-10,-5,-18.5,0,0,np.pi/2])
+poses_0[7,:] = augment_3D_locations([-12,-15,-10,0,0,np.pi/2])
 
 
 
-comp_small_envs = [comp_small_env_0, comp_small_env_1]
+comp_small_envs = [comp_small_env_0]
 
-comp_small_poses = [poses_0, poses_1]
+comp_small_poses = [poses_0]
 
 
 
@@ -417,10 +417,6 @@ class LockEnv():
 		pos += pos_noise
 		ang += ang_noise
 		self.component_locations = np.hstack((pos,np.sin(ang),np.cos(ang)))
-		self.compute_component_distances()
-
-	def set_locations(self,locations):
-		self.component_locations = locations
 		self.compute_component_distances()
 
 

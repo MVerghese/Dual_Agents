@@ -20,24 +20,12 @@ from LockBeliefSpaceFixed import compute_q, argmax
 
 from matplotlib import pyplot as plt 
 
-# from torch_geometric.datasets import TUDataset
-# dataset = TUDataset(root='/tmp/ENZYMES', name='ENZYMES')
-# data = dataset
-# print(data)
-# 1/0
-
-#class MLP(nn.Module):
-    #def __init__(self, layers):
-        #self.net = nn.Sequential(*[nn.Sequential(nn.Linear(layers[i])) for i in range(1, len(layers))])
-
 BUFFER_SIZE = int(1e5)  #replay buffer size
-BATCH_SIZE = 16         # minibatch size
+BATCH_SIZE = 64         # minibatch size
 GAMMA = 0.99            # discount factor
-TAU = 1e-2              # for soft update of target parameters
-
-LR = 3e-4               # learning rate
-TAU = LR
-UPDATE_EVERY = 2        # how often to update the network
+TAU = 1e-3              # for soft update of target parameters
+LR = 5e-4               # learning rate
+UPDATE_EVERY = 4        # how often to update the network
 
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -118,15 +106,20 @@ class QNetwork(nn.Module):
         # self.conv6 = GINConv(self.nn6, eps=2.0)
         # self.nn7 = MLPB()
         # F_x = 2, F_e = 4
-        self.conv1 = MetaLayer(EdgeModel(F_x = 7, F_e = 4),NodeModel(F_x = 7, F_e = 64))
+        self.conv1 = MetaLayer(EdgeModel(F_x = 2, F_e = 9),NodeModel(F_x = 2, F_e = 64))
         # F_x = 64, F_e = 64
         self.conv2 = MetaLayer(EdgeModel(F_x = 64, F_e = 64),NodeModel(F_x = 64, F_e = 64))
         # F_x = 64, F_e = 64
         self.conv3 = MetaLayer(EdgeModel(F_x = 64, F_e = 64),NodeModel(F_x = 64, F_e = 64))
+
         self.conv4 = MetaLayer(EdgeModel(F_x = 64, F_e = 64),NodeModel(F_x = 64, F_e = 64))
 
         self.conv5 = MetaLayer(EdgeModel(F_x = 64, F_e = 64),NodeModel(F_x = 64, F_e = 64,out_dim=1))
 
+
+        # self.conv3 = MetaLayer(EdgeModel(indim=4),NodeModel(indim=4))
+        # self.conv4 = MetaLayer(EdgeModel(indim=4),NodeModel(indim=4))
+        # self.conv5 = MetaLayer(EdgeModel(indim=4),NodeModel(indim=4))
 
         
 
@@ -172,7 +165,7 @@ class QNetwork(nn.Module):
         x, edge_attr, _ = self.conv5(x, edge_index, edge_attr)
 
 
-        # x = x
+        x = torch.sigmoid(x)
         # print(x)
 
         # import pdb; pdb.set_trace()
@@ -183,7 +176,7 @@ class QNetwork(nn.Module):
 class Agent():
     """Interacts with and learns form environment."""
     
-    def __init__(self, state_size, action_size, seed, meta_learn_k = 1, savepath='checkpoint.pth',load=False, loadpath='checkpoint.pth'):
+    def __init__(self, state_size, action_size, seed, savepath='mbcheckpoint.pth',load=False, loadpath='mbcheckpoint.pth'):
         """Initialize an Agent object.
         
         Params
@@ -196,27 +189,21 @@ class Agent():
         self.state_size = state_size
         self.action_size = action_size
         self.seed = random.seed(seed)
-        self.meta_learn_k = meta_learn_k
         
         
         #Q- Network
-        self.qnetwork_local = QNetwork(state_size, action_size, seed).to(device)
-        self.qnetwork_target = QNetwork(state_size, action_size, seed).to(device)
-
+        self.obj_interaction_network = QNetwork(state_size, action_size, seed).to(device)
         if load:
-            self.qnetwork_local.load_state_dict(torch.load(loadpath,map_location = torch.device("cpu")))
-            self.qnetwork_target.load_state_dict(torch.load(loadpath,map_location = torch.device("cpu")))
-            self.qnetwork_local.train()
-            self.qnetwork_target.train()
+            self.obj_interaction_network.load_state_dict(torch.load(loadpath,map_location = torch.device("cpu")))
+            self.obj_interaction_network.train()
 
-
-        xx, yy = np.meshgrid(np.arange(5),np.arange(5))
+        xx, yy = np.meshgrid(np.arange(self.state_size),np.arange(self.state_size))
         
         edge_index = np.vstack((xx.flatten(),yy.flatten())).astype(int)
 
         ixs = []
-        for i in range(5):
-            for j in range(5):
+        for i in range(self.state_size):
+            for j in range(self.state_size):
                 if i != j:
                     ixs.append([i, j])
         ixs = torch.as_tensor(ixs, dtype=torch.long)
@@ -227,32 +214,42 @@ class Agent():
         # edge_index = np.delete(edge_index,[0,6,12,18,24],1)
         #self.edge_index = torch.from_numpy(edge_index)
         self.edge_index = ixs
+
+        # import pdb; pdb.set_trace()
+
+        # edge_index = np.delete(edge_index,[0,6,12,18,24],1)
+        #self.edge_index = torch.from_numpy(edge_index)
+        # self.edge_index = ixs
         
-        self.optimizer = optim.Adam(self.qnetwork_local.parameters(),lr=LR)
+        self.optimizer = optim.Adam(self.obj_interaction_network.parameters(),lr=LR)
         
         # Replay memory 
         self.memory = ReplayBuffer(action_size, BUFFER_SIZE,BATCH_SIZE,seed)
         # Initialize time step (for updating every UPDATE_EVERY steps)
         self.t_step = 0
         
-    def step(self, state, action, reward, next_step, done, t):
+    def step(self, state, action, success):
         # Save experience in replay memory
-        self.memory.add(state, action, reward, next_step, done)
+        self.memory.add(state, action, success)
 
         # Learn every UPDATE_EVERY time steps.
-        if self.meta_learn_k > 1:
-            if done:
-                experience = self.memory.meta_learn_sample(t)
-                self.learn(experience,GAMMA)
-        else:
-            self.t_step = (self.t_step+1)% UPDATE_EVERY
-            if self.t_step == 0:
-                # If enough samples are available in memory, get radom subset and learn
+        self.t_step = (self.t_step+1)% UPDATE_EVERY
+        if self.t_step == 0:
+            # If enough samples are available in memory, get radom subset and learn
 
-                if len(self.memory)>BATCH_SIZE:
-                    experience = self.memory.sample()
-                    self.learn(experience, GAMMA)
-    def act(self, state, eps = 0):
+            if len(self.memory)>BATCH_SIZE:
+                experience = self.memory.sample()
+                self.learn(experience, GAMMA)
+
+    def neural_action_probs(self,belief_state,state,full_state):
+        full_state = torch.from_numpy(full_state).float().unsqueeze(0).to(device)
+        self.obj_interaction_network.eval()
+        with torch.no_grad():
+            action_probs = self.obj_interaction_network(self.data_graph(full_state)).view(self.state_size)
+        self.obj_interaction_network.train()
+        return(action_probs.cpu().data.numpy())
+
+    def act(self, state, goal_state,eps = 0):
         """Returns action for given state as per current policy
 
         Params
@@ -261,15 +258,16 @@ class Agent():
             eps (float): epsilon, for epsilon-greedy action selection
 
         """
-        state = torch.from_numpy(state).float().unsqueeze(0).to(device)
-        self.qnetwork_local.eval()
-        with torch.no_grad():
-            action_values = self.qnetwork_local(self.data_graph(state))
-        self.qnetwork_local.train()
+        
 
         #Epsilon -greedy action selction
+        obj_state = state[:self.state_size]
         if random.random() > eps:
-            return np.argmax(action_values.cpu().data.numpy())
+
+            action_values = compute_q(obj_state,[],goal_state,self.neural_action_probs,state)
+            # print(obj_state,action_values)
+
+            return argmax(action_values)
         else:
             return random.choice(np.arange(self.action_size))
             
@@ -283,58 +281,30 @@ class Agent():
 
             gamma (float): discount factor
         """
-        states, actions, rewards, next_state, dones = experiences
-        batch_size = len(states)
+        states, actions, successes = experiences
         ## TODO: compute and minimize the loss
         criterion = torch.nn.MSELoss()
         # Local model is one which we need to train so it's in training mode
-        self.qnetwork_local.train()
+        self.obj_interaction_network.train()
         # Target model is one with which we need to get our target so it's in evaluation mode
         # So that when we do a forward pass with target model it does not calculate gradient.
         # We will update target model weights with soft_update function
-        self.qnetwork_target.eval()
         #shape of output from the model (batch_size,action_dim) = (64,4)
         # print(self.qnetwork_local(self.data_graph(states)).shape)
         # import pdb; pdb.set_trace()
+        predicted_targets = self.obj_interaction_network(self.data_graph(states)).view(BATCH_SIZE, -1, 1).gather(1, actions.unsqueeze(1))
+        predicted_targets = predicted_targets.squeeze(1)
 
-        for i in range(self.meta_learn_k):
-            # print("Targets")
-            # print(states.shape)
-            predicted_targets = self.qnetwork_local(self.data_graph(states)).view(batch_size, -1, 1).gather(1, actions.unsqueeze(1))
-            
-            with torch.no_grad():
-                # import pdb; pdb.set_trace()
-                # labels_next = self.qnetwork_target(self.data_graph(next_state)).detach().max(1)[0].unsqueeze(1)
-                # print("Labels")
-                # print(next_state.shape)
-                labels_next = self.qnetwork_target(self.data_graph(next_state)).detach().view(batch_size, -1, 1).max(dim=1)[0].unsqueeze(1)
-            # .detach() ->  Returns a new Tensor, detached from the current graph.
+        # print(predicted_targets.shape)
+        # print(predicted_targets)
 
-            labels = rewards.unsqueeze(1) + (gamma* labels_next*(1-dones.unsqueeze(1)))
-
-            loss = criterion(predicted_targets,labels).to(device)
-            # print(loss.item())
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+        loss = criterion(predicted_targets,successes).to(device)
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
 
         # ------------------- update target network ------------------- #
-        self.soft_update(self.qnetwork_local,self.qnetwork_target,TAU)
-            
-    def soft_update(self, local_model, target_model, tau):
-        """Soft update model parameters.
-        θ_target = τ*θ_local + (1 - τ)*θ_target
-
-        Params
-        =======
-            local model (PyTorch model): weights will be copied from
-            target model (PyTorch model): weights will be copied to
-            tau (float): interpolation parameter
-
-        """
-        for target_param, local_param in zip(target_model.parameters(),
-                                           local_model.parameters()):
-            target_param.data.copy_(tau*local_param.data + (1-tau)*target_param.data)
+        # self.soft_update(self.qnetwork_local,self.qnetwork_target,TAU)
 
     def data_graph(self,state):
         # import pdb; pdb.set_trace()
@@ -344,13 +314,10 @@ class Agent():
         # ids = state[:, 25:30].view(-1, 5, 1)
         # goal = state[:, 30:35].view(-1, 5, 1)
         # print(state.shape)
-        # print(state.shape)
-        xs = state[:,:35]
-        edge_attrs = state[:,35:]
-        # print(edge_attrs.shape)
-        # print(xs.shape)
-        xs = xs.view(-1,7,5).transpose(1,2)
-        edge_attrs = edge_attrs.view(-1,20,4)
+        xs = state[:,:2*self.state_size]
+        edge_attrs = state[:,2*self.state_size:]
+        xs = xs.view(-1,2,self.state_size).transpose(1,2)
+        edge_attrs = edge_attrs.view(-1,self.state_size*(self.state_size-1),9)
         # xs = torch.cat([history, ids, goal], dim=-1)
         # import pdb;pdb.set_trace()
         # print(x.shape)
@@ -361,7 +328,6 @@ class Agent():
         batch.to(device)
         return(batch)
 
-            
 class ReplayBuffer:
     """Fixed -size buffe to store experience tuples."""
     
@@ -381,14 +347,12 @@ class ReplayBuffer:
         self.batch_size = batch_size
         self.experiences = namedtuple("Experience", field_names=["state",
                                                                "action",
-                                                               "reward",
-                                                               "next_state",
-                                                               "done"])
+                                                               "success"])
         self.seed = random.seed(seed)
         
-    def add(self,state, action, reward, next_state,done):
+    def add(self,state, action, success):
         """Add a new experience to memory."""
-        e = self.experiences(state,action,reward,next_state,done)
+        e = self.experiences(state,action,success)
         self.memory.append(e)
         
     def sample(self):
@@ -397,36 +361,15 @@ class ReplayBuffer:
         
         states = torch.from_numpy(np.vstack([e.state for e in experiences if e is not None])).float().to(device)
         actions = torch.from_numpy(np.vstack([e.action for e in experiences if e is not None])).long().to(device)
-        rewards = torch.from_numpy(np.vstack([e.reward for e in experiences if e is not None])).float().to(device)
-        next_states = torch.from_numpy(np.vstack([e.next_state for e in experiences if e is not None])).float().to(device)
-        dones = torch.from_numpy(np.vstack([e.done for e in experiences if e is not None]).astype(np.uint8)).float().to(device)
+        successes = torch.from_numpy(np.vstack([e.success for e in experiences if e is not None])).float().to(device)
         
-        return (states,actions,rewards,next_states,dones)
-
-    def meta_learn_sample(self,ep_len):
-        experiences = []
-        for i in range(len(self.memory)-ep_len,len(self.memory)):
-            experiences.append(self.memory[i])
-        # print(len(self.memory))
-        # experiences = self.memory[ep_len*-1:]
-
-        states = torch.from_numpy(np.vstack([e.state for e in experiences if e is not None])).float().to(device)
-        actions = torch.from_numpy(np.vstack([e.action for e in experiences if e is not None])).long().to(device)
-        rewards = torch.from_numpy(np.vstack([e.reward for e in experiences if e is not None])).float().to(device)
-        next_states = torch.from_numpy(np.vstack([e.next_state for e in experiences if e is not None])).float().to(device)
-        dones = torch.from_numpy(np.vstack([e.done for e in experiences if e is not None]).astype(np.uint8)).float().to(device)
-        
-        return (states,actions,rewards,next_states,dones)
-
-
+        return (states,actions,successes)
     def __len__(self):
         """Return the current size of internal memory."""
         return len(self.memory)
 
-
-
-def dqn(agent,n_train_envs,n_episodes= 200, max_t = 100, eps_start=1.0, eps_end = 0.01,
-       eps_decay=0.999):
+def train_mb_agent(agent,n_train_envs,n_episodes= 200, max_t = 1000, eps_start=1.0, eps_end = 0.01,
+       eps_decay=0.99):
     # print(n_episodes)
     """Deep Q-Learning
     
@@ -441,28 +384,18 @@ def dqn(agent,n_train_envs,n_episodes= 200, max_t = 100, eps_start=1.0, eps_end 
     """
     scores = [] # list containing score from each episode
     scores_window = deque(maxlen=50) # last 100 scores
+    ep_len_window = deque(maxlen=50)
     eps = eps_start
-    total_actions = 0
     for i_episode in range(1, n_episodes+1):
 
-        env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = 2,return_state_mode='mf',randomize_config=False)
-        locations = np.array([[24.0653,-7.0341,-1,-0.0239],
-                              [18.0313,-7.2389,-1,-0.0230],
-                              [10.4267,-6.9789,-1,-0.0187],
-                              [11.4360,0.7323,0.0090,-1],
-                              [11.4134,7.5497,0.0568,-0.9984]])
-        env.set_locations(locations)
-        # env = PuzzleBoxEnv.CompEnv()
-
+        # env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = np.random.choice(np.arange(n_train_envs)),return_state_mode='mb',randomize_config=True)
+        env = PuzzleBoxEnv.CompEnv(return_state_mode = 'mb',timeout=200, randomize_config=True)
         _,state,_,_ = env.reset()
         score = 0
         for t in range(max_t):
-            action = agent.act(state,eps)
-            _,next_state,reward,done = env.step(action)
-            # print("next_state")
-            # print(next_state.shape)
-
-            agent.step(state,action,reward,next_state,done,t)
+            action = agent.act(state,env.get_goal_state(),eps)
+            success,next_state,reward,done = env.step(action)
+            agent.step(state,action,int(success))
             ## above step decides whether we will train(learn) the network
             ## actor (local_qnetwork) or we will fill the replay buffer
             ## if len replay buffer is equal to the batch size then we will
@@ -470,75 +403,29 @@ def dqn(agent,n_train_envs,n_episodes= 200, max_t = 100, eps_start=1.0, eps_end 
             ## replay buffer.
             state = next_state
             score += reward
-            total_actions += 1
-            if total_actions %120==0:
-                quick_eval(agent,8,eps)
             if done:
                 break
-            if total_actions > 120*5:
-                break
-        if total_actions > 120*5:
-            torch.save(agent.qnetwork_local.state_dict(),'Real_Robot_DQN_Model.pth')
-            break
         scores_window.append(score) ## save the most recent score
         scores.append(score) ## save the most recent score
+        ep_len_window.append(t)
         eps = max(eps*eps_decay,eps_end)## decrease the epsilon
-        print('\rEpisode {}\tAverage Score {:.2f}\t epsilon {:.2f}'.format(i_episode,np.mean(scores_window),eps), end="")
-        if i_episode %40==0:
-            print('\rEpisode {}\tAverage Score {:.2f}\t epsilon {:.2f}'.format(i_episode,np.mean(scores_window),eps))
+        print('\rEpisode {}\tAverage Score {:.2f}\t epsilon {:.2f} \t episode length {:.2f}'.format(i_episode,np.mean(scores_window),eps,np.mean(ep_len_window)), end="")
+        if i_episode %50==0:
+            print('\rEpisode {}\tAverage Score {:.2f}\t epsilon {:.2f} \t episode length {:.2f}'.format(i_episode,np.mean(scores_window),eps,np.mean(ep_len_window)))
             
-            torch.save(agent.qnetwork_local.state_dict(),'checkpoint.pth')
-        
+            _,state,_,_ = env.reset()
+            print(env.get_goal_state())
+            state[:5] = 1
+            state[env.get_goal_state()] = 0
+            print(agent.neural_action_probs([],[],state))
+            
+            torch.save(agent.obj_interaction_network.state_dict(),'mb_checkpoint.pth')
                 
     return scores
 
-def quick_eval(agent,eps,env_index = 8, locations = None):
-    total_score = 0
-    if not np.any(locations):
-        locations = np.array([[23.0993,-0.1519,0.6930,0.7210],
-                              [16.5110,-4.7502,0.6710,-0.7415],
-                              [12.8176,-9.8099,0.0359,-0.9993],
-                              [10.6856,-4.1045,0.0253,-1.0000],
-                              [11.1199,1.9743,0.0763,-0.9971],])
-    for i in range(5):
-        env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = env_index,return_state_mode='mf',randomize_config=False)
-        env.set_locations(locations)
-        # env = PuzzleBoxEnv.CompEnv()
-
-        _,state,_,_ = env.reset()
-        score = 0
-        for t in range(200):
-            action = agent.act(state,eps)
-            _,next_state,reward,done = env.step(action)
-            # print("next_state")
-            # print(next_state.shape)
-
-            # agent.step(state,action,reward,next_state,done,t)
-            ## above step decides whether we will train(learn) the network
-            ## actor (local_qnetwork) or we will fill the replay buffer
-            ## if len replay buffer is equal to the batch size then we will
-            ## train the network or otherwise we will add experience tuple in our 
-            ## replay buffer.
-            state = next_state
-            score += reward
-            if done:
-                break
-        print(t+1)
-        total_score += np.min([t+1,30])
-
-    print(total_score/5)
-
-
 def main():
-    agent = Agent(state_size=35,action_size=5,seed=2,meta_learn_k = 1,loadpath='models/DQNModel92000.pth',load = True)
-    # quick_eval(agent,.1)
-    locations = np.array([[24.0653,-7.0341,-1,-0.0239],
-                          [18.0313,-7.2389,-1,-0.0230],
-                          [10.4267,-6.9789,-1,-0.0187],
-                          [11.4360,0.7323,0.0090,-1],
-                          [11.4134,7.5497,0.0568,-0.9984]])
-    quick_eval(agent,.1,env_index = 2,locations = locations)
-    # scores= dqn(agent,1,n_episodes=2000, eps_end = .2, eps_decay = .9)
+    agent = Agent(state_size=8,action_size=8,seed=0)
+    scores= train_mb_agent(agent,1,n_episodes=1000, eps_end = .3, eps_decay = .99)
 
     mean_scores = []
     for i in range(100,len(scores)):

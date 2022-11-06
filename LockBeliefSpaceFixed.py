@@ -1,6 +1,7 @@
 import numpy as np
 import time 
 from matplotlib import pyplot as plt
+from matplotlib import rc,rcParams
 import warnings
 import PuzzleBoxEnv
 
@@ -384,9 +385,19 @@ def dual_policy(belief_state,current_state,state_hash,prev_action,**kwargs):
 	weighting = (h-ent_min)/(ent_max-ent_min)
 
 	action_probs = info_action_scores*(weighting)+optm_action_scores*(1-weighting)
+	# if current_state[0] == 1 and current_state[1] == 1:
+	# 	action_probs[0] = 0.
+
+	#UNCOMMENT FOR DISASSEMBLY
+	# action_probs[np.where(current_state == 1)] = -1
+		
 	# if prev_action >= 0:
 	# 	action_probs[prev_action] = 0
-	return(argmax(action_probs),action_probs)
+	action = argmax(action_probs)
+	if current_state[0] == 1 and current_state[1] == 1 and action == 0:
+		print("Clause")
+	# print(action_probs)
+	return(action,action_probs)
 
 
 class search_node:
@@ -398,7 +409,7 @@ class search_node:
 		self.value = value
 
 class dijkstra_search:
-	def __init__(self,start_state,bf,belief_state,actuation_prob_func,full_state=None,decay=.99):
+	def __init__(self,start_state,bf,belief_state,actuation_prob_func,full_state=None,decay=.90):
 		self.bf = bf
 		self.nodes = [None]*2**bf
 		start_state = start_state.astype(int)
@@ -417,7 +428,7 @@ class dijkstra_search:
 		current_state = node.state
 		if np.any(self.full_state):
 			current_full_state = np.copy(self.full_state)
-			current_full_state[:5] = current_state
+			current_full_state[:current_state.shape[0]] = current_state
 		else:
 			current_full_state = []
 
@@ -518,7 +529,7 @@ def compute_q(state,belief_state,goal_state,actuation_prob_func,full_state = Non
 			goals.append(padded_state)
 	if np.any(full_state):
 		current_full_state = np.copy(full_state)
-		current_full_state[:5] = state
+		current_full_state[:state.shape[0]] = state
 	else:
 		current_full_state = []
 	actuation_probs = actuation_prob_func(belief_state,state,current_full_state)
@@ -859,9 +870,10 @@ def train_agent(agent,num_train_envs,eps_per_env = 1,env_type = 'train'):
 	# print(num_train_envs)
 	for ep in range(eps_per_env):
 		for i in range(num_train_envs):
-			env = PuzzleBoxEnv.LockEnv(env_type,5,2,env_index = i)
+			env = PuzzleBoxEnv.CompEnv(env_index = i,jamming=0.0)
 			# print(env.get_object_ids())
-			agent.init_policy(5,env.get_object_ids(),env.get_component_locations(),env.get_goal_state(),use_priors = False)
+			agent.init_policy(8,env.get_object_ids(),env.get_component_locations(),env.get_goal_state(),use_priors = False)
+			# print(env.get_component_locations())
 			success, state, reward, done = env.reset()
 			counter = 0
 			while not done:
@@ -877,7 +889,7 @@ def train_agent(agent,num_train_envs,eps_per_env = 1,env_type = 'train'):
 
 
 class Structured_Agent_Dist:
-	def __init__(self,max_num_components):
+	def __init__(self,max_num_components,dim = 2):
 		self.prior_graphs = []
 		self.prior_cids = []
 		self.prior_dists = []
@@ -885,8 +897,12 @@ class Structured_Agent_Dist:
 		self.index_mat = np.arange(max_num_components**2).reshape((max_num_components,max_num_components))
 		self.component_interaction_spaces = []
 		self.prior_component_interactions = []
+		if dim == 2:
+			self.dist_size = 4
+		else:
+			self.dist_size = 9
 		for i in range(max_num_components**2):
-			self.component_interaction_spaces.append(np.zeros((0,4)))
+			self.component_interaction_spaces.append(np.zeros((0,self.dist_size)))
 			self.prior_component_interactions.append(np.zeros((0,2,2)))
 
 	def dump_graphs(self,graph_filename = 'prior_graphs.npy',cids_filename = 'prior_cids.npy',dists_filename = 'prior_dists.npy'):
@@ -923,13 +939,14 @@ class Structured_Agent_Dist:
 		# print(dists.shape)
 		self.goal_state = goal_state
 		self.state_hash = np.zeros(2**num_components)
-		self.belief_state = np.zeros((5,2,5,2))
+		self.belief_state = np.zeros((num_components,2,num_components,2))
+		
 		if use_priors:
 			
 
 			for i in range(num_components):
 				for j in range(num_components):
-					rel_dist = (dists[j] - dists[i]).reshape((1,4))
+					rel_dist = (dists[j] - dists[i]).reshape((1,self.dist_size))
 					inter_idx = self.index_mat[self.cids[i],self.cids[j]]
 					diffs = self.component_interaction_spaces[inter_idx] - rel_dist
 					rel_dist_distances = np.sqrt(np.sum(diffs**2,axis=1))
@@ -995,69 +1012,272 @@ class Structured_Agent_Dist:
 		for i in range(self.belief_state.shape[0]):
 			for j in range(self.belief_state.shape[2]):
 				idx = self.index_mat[self.cids[i],self.cids[j]]
-				self.component_interaction_spaces[idx] = np.vstack((self.component_interaction_spaces[idx],(self.dists[j] - self.dists[i]).reshape((1,4))))
+				self.component_interaction_spaces[idx] = np.vstack((self.component_interaction_spaces[idx],(self.dists[j] - self.dists[i]).reshape((1,self.dist_size))))
 				self.prior_component_interactions[idx] = np.vstack((self.prior_component_interactions[idx],self.belief_state[i,:,j,:].reshape((1,2,2))))
 
 
+def rect(pos):
+    r = plt.Rectangle(pos-0.5, 1,1, facecolor="none", edgecolor="k", linewidth=1.2)
+    plt.gca().add_patch(r)
 
+def config_plot(config,title):
+	rc('text', usetex=True)
+	rc('axes', linewidth=2)
+	rc('font', weight='bold')
+	rcParams['text.latex.preamble'] = r'\usepackage{sfmath} \boldmath'
+	rcParams["legend.loc"] = 'lower right'
+	plt.imshow(config,vmin=0,vmax=1)
+	ax = plt.gca()
+	ax.set_xticks(np.arange(5))
+	ax.set_xticklabels([r'\textbf{W1}',r'\textbf{S1}',r'\textbf{D1}',r'\textbf{S2}',r'\textbf{D2}'])
+	ax.set_yticks(np.arange(5))
+	ax.set_yticklabels([r'\textbf{W1}',r'\textbf{S1}',r'\textbf{D1}',r'\textbf{S2}',r'\textbf{D2}'])
+
+	x, y = np.meshgrid(np.arange(5),np.arange(5))
+	pos = np.c_[x.flatten(),y.flatten()]
+	for p in pos:
+		rect(p)
+
+
+	plt.title(title)
+	# plt.show()
 
 
 
 
 
 def main():
+	np.random.seed(1)
+	# agent = Structured_Agent_Dist(8,dim=3)
+
+	# for i in [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]:
+	# 	env = PuzzleBoxEnv.CompEnv(env_index = i,jamming=0.0)
+	# 	print(env.get_object_ids())
+	# 	locations = np.array([[24.0653,-7.0341,-1,-0.0239],
+	# 						  [18.0313,-7.2389,-1,-0.0230],
+	# 						  [10.4267,-6.9789,-1,-0.0187],
+	# 						  [11.4360,0.7323,0.0090,-1],
+	# 						  [11.4134,7.5497,0.0568,-0.9984]])			
+	# 	agent.init_policy(8,env.get_object_ids(),env.get_component_locations(),env.get_goal_state(),use_priors = False)
+	# 	success, state, reward, done = env.reset()
+	# 	counter = 0
+	# 	while not done:
+	# 		action = agent.act(state)
+	# 		print(counter)
+	# 		# print(state)
+	# 		# print(action)
+	# 		success, new_state, reward, done = env.step(action)
+	# 		agent.update_policy_info(state,success)
+	# 		state = new_state
+	# 		counter += 1
+	# 	print(counter)
+	# 	agent.save_graph()
+
+	# print("TESTING")
+
+	# for i in [1]:
+	# 	env = PuzzleBoxEnv.CompEnv(env_index = i,jamming=0.0)
+	# 	print(env.get_object_ids())
+	# 	locations = np.array([[24.0653,-7.0341,-1,-0.0239],
+	# 						  [18.0313,-7.2389,-1,-0.0230],
+	# 						  [10.4267,-6.9789,-1,-0.0187],
+	# 						  [11.4360,0.7323,0.0090,-1],
+	# 						  [11.4134,7.5497,0.0568,-0.9984]])			
+	# 	agent.init_policy(8,env.get_object_ids(),env.get_component_locations(),env.get_goal_state(),use_priors = True)
+	# 	success, state, reward, done = env.reset()
+	# 	counter = 0
+	# 	while not done:
+	# 		action = agent.act(state, ent_max = 200)
+	# 		print(counter)
+	# 		print(state)
+	# 		print(action)
+	# 		success, new_state, reward, done = env.step(action)
+	# 		agent.update_policy_info(state,success)
+	# 		state = new_state
+	# 		counter += 1
+	# 	print(counter)
+	# 	agent.save_graph()
+	# 1/0
+
+	np.random.seed(0)
 	
 	agent = Structured_Agent_Dist(3)
 	print('TRAINING')
-	for i in range(9):
-		env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = i)
-		print(env.get_object_ids())
-		agent.init_policy(5,env.get_object_ids(),env.get_component_locations(),env.get_goal_state(),use_priors = False)
-		success, state, reward, done = env.reset()
-		counter = 0
-		while not done:
-			action = agent.act(state)
-			success, new_state, reward, done = env.step(action)
-			agent.update_policy_info(state,success)
-			state = new_state
-			counter += 1
-		print(counter)
-		agent.save_graph()
-	print('TRAINING RESULTS')
-	for i in range(9):
-		env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = i)
-		print(env.get_object_ids())
-		agent.init_policy(5,env.get_object_ids(),env.get_component_locations(),env.get_goal_state(),use_priors = True)
-		success, state, reward, done = env.reset()
-		counter = 0
-		while not done:
-			action = agent.act(state,ent_max = 200)
-			success, new_state, reward, done = env.step(action)
-			agent.update_policy_info(state,success)
-			state = new_state
-			counter += 1
-		print(counter)
-		# agent.save_graph()
-	print('TESTING')
-	for i in range(3):
-		env = PuzzleBoxEnv.LockEnv('test',5,2,env_index = i)
-		print("Current CIDS", env.get_object_ids())
-		agent.init_policy(5,env.get_object_ids(),env.get_component_locations(),env.get_goal_state(),use_priors = True)
-		success, state, reward, done = env.reset()
-		counter = 0
-		while not done:
-			# print("Action Selection")
-			action = agent.act(state,ent_max = 200)
-			success, new_state, reward, done = env.step(action)
-			# print("Information update")
-			agent.update_policy_info(state,success)
-			state = new_state
-			counter += 1
-		print("Steps: ", counter)
+	total_iters = 0
+	for j in range(1):
+		for i in range(9):
+			env = PuzzleBoxEnv.LockEnv('all',5,2,env_index = i,jamming=0.0)
+			print(env.get_object_ids())
+			locations = np.array([[24.0653,-7.0341,-1,-0.0239],
+								  [18.0313,-7.2389,-1,-0.0230],
+								  [10.4267,-6.9789,-1,-0.0187],
+								  [11.4360,0.7323,0.0090,-1],
+								  [11.4134,7.5497,0.0568,-0.9984]])	
+			if j  < 1:
+				agent.init_policy(5,env.get_object_ids(),locations,env.get_goal_state(),use_priors = False)
+			else:
+				agent.init_policy(5,env.get_object_ids(),locations,env.get_goal_state(),use_priors = False)
+			success, state, reward, done = env.reset()
+			counter = 0
+			while not done:
+				action = agent.act(state)
+				print(counter)
+				print(state)
+				print(action)
+				success, new_state, reward, done = env.step(action)
+				agent.update_policy_info(state,success)
+				state = new_state
+				counter += 1
+				total_iters += 1
+				if total_iters > 107*1.5:
+					print("Time Up")
+					break
+			print(counter)
+			agent.save_graph()
+	# 1/0
+	# print('TRAINING RESULTS')
+	# for i in range(9):
+	# 	env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = i)
+	# 	print(env.get_object_ids())
+	# 	agent.init_policy(5,env.get_object_ids(),env.get_component_locations(),env.get_goal_state(),use_priors = True)
+	# 	success, state, reward, done = env.reset()
+	# 	counter = 0
+	# 	while not done:
+	# 		action = agent.act(state,ent_max = 200)
+	# 		success, new_state, reward, done = env.step(action)
+	# 		agent.update_policy_info(state,success)
+	# 		state = new_state
+	# 		counter += 1
+	# 	print(counter)
+	# 	# agent.save_graph()
+	# print('TESTING')
+	# for i in range(3):
+	# 	env = PuzzleBoxEnv.LockEnv('test',5,2,env_index = i)
+	# 	print("Current CIDS", env.get_object_ids())
+	# 	agent.init_policy(5,env.get_object_ids(),env.get_component_locations(),env.get_goal_state(),use_priors = True)
+	# 	success, state, reward, done = env.reset()
+	# 	counter = 0
+	# 	while not done:
+	# 		# print("Action Selection")
+	# 		action = agent.act(state,ent_max = 200)
+	# 		success, new_state, reward, done = env.step(action)
+	# 		# print("Information update")
+	# 		agent.update_policy_info(state,success)
+	# 		state = new_state
+	# 		counter += 1
+	# 	print("Steps: ", counter)
 		# agent.save_graph()
 	# env = PuzzleBoxEnv.LockEnv('random',5,2)
 	# print("Current CIDS", env.get_object_ids())
 	# agent.init_policy(5,env.get_object_ids(),env.get_goal_state(),use_priors = True, priors_k=1)
+	print("TESTING")
+	np.random.seed(5)
+	# for i in range(1):
+	# 	counter_total = 0
+	# 	for i in range(5):
+	# 		env = PuzzleBoxEnv.LockEnv('all',5,2,env_index = 8,jamming=0.0)
+	# 		print("Current CIDS", env.get_object_ids())
+	# 		locations = np.array([[23.0993,-0.1519,0.6930,0.7210],
+	# 							  [16.5110,-4.7502,0.6710,-0.7415],
+	# 							  [12.8176,-9.8099,0.0359,-0.9993],
+	# 							  [10.6856,-4.1045,0.0253,-1.0000],
+	# 							  [11.1199,1.9743,0.0763,-0.9971],])
+	# 		agent.init_policy(5,env.get_object_ids(),locations,env.get_goal_state(),priors_k = 5, use_priors = True)
+	# 		success, state, reward, done = env.reset()
+	# 		counter = 0
+	# 		config_plot(agent.belief_state[:,0,:,0],r'\textbf{Prior}')
+	# 		plt.savefig('Prior.eps')
+	# 		counter = 0
+	# 		while not done:
+	# 			# print("Action Selection")
+	# 			# print("")
+	# 			action = agent.act(state,ent_max = 200)
+	# 			# print(counter)
+	# 			# print(state)
+	# 			# print(action)
+	# 			success, new_state, reward, done = env.step(action)
+	# 			config_plot(agent.belief_state[:,0,:,0],r'\textbf{Action: %i}'%(counter+1))
+	# 			# plt.savefig('Action'+str(counter+1)+'.eps')
+	# 			# print("Information update")
+	# 			agent.update_policy_info(state,success)
+	# 			state = new_state
+	# 			counter += 1
+	# 		print("Steps: ", counter)
+	# 		counter_total += counter
+	# 		# x = input("")
+	# 	# agent.save_graph()
+	# 	print("Average:", counter_total/5)
+
+	for i in range(1):
+		counter_total = 0
+		for i in range(5):
+			env = PuzzleBoxEnv.LockEnv('all',5,2,env_index = 2,jamming=0.0)
+			print("Current CIDS", env.get_object_ids())
+			locations = np.array([[24.0653,-7.0341,-1,-0.0239],
+								  [18.0313,-7.2389,-1,-0.0230],
+								  [10.4267,-6.9789,-1,-0.0187],
+								  [11.4360,0.7323,0.0090,-1],
+								  [11.4134,7.5497,0.0568,-0.9984]])	
+			agent.init_policy(5,env.get_object_ids(),locations,env.get_goal_state(),priors_k = 5, use_priors = True)
+			success, state, reward, done = env.reset()
+			counter = 0
+			config_plot(agent.belief_state[:,0,:,0],r'\textbf{Prior}')
+			plt.savefig('Prior.eps')
+			counter = 0
+			while not done:
+				# print("Action Selection")
+				# print("")
+				action = agent.act(state,ent_max = 200)
+				# print(counter)
+				# print(state)
+				# print(action)
+				success, new_state, reward, done = env.step(action)
+				config_plot(agent.belief_state[:,0,:,0],r'\textbf{Action: %i}'%(counter+1))
+				# plt.savefig('Action'+str(counter+1)+'.eps')
+				# print("Information update")
+				agent.update_policy_info(state,success)
+				state = new_state
+				counter += 1
+			print("Steps: ", counter)
+			counter_total += counter
+			# x = input("")
+		# agent.save_graph()
+		print("Average:", counter_total/5)
+
+	#avg 7.6
+
+	# np.random.seed(1)
+	# for i in range(1):
+	# 	env = PuzzleBoxEnv.LockEnv('all',5,2,env_index = 8)
+	# 	print("Current CIDS", env.get_object_ids())
+	# 	locations = np.array([[23.0993,-0.1519,0.6930,0.7210],
+	# 						  [16.5110,-4.7502,0.6710,-0.7415],
+	# 						  [12.8176,-9.8099,0.0359,-0.9993],
+	# 						  [10.6856,-4.1045,0.0253,-1.0000],
+	# 						  [11.1199,1.9743,0.0763,-0.9971],])
+	# 	agent.init_policy(5,env.get_object_ids(),env.get_component_locations(),env.get_goal_state(),use_priors = True)
+	# 	success, state, reward, done = env.reset()
+	# 	counter = 0
+	# 	config_plot(agent.belief_state[:,0,:,0],r'\textbf{Prior}')
+	# 	plt.savefig('Prior.eps')
+	# 	counter = 0
+	# 	while not done:
+	# 		# print("Action Selection")
+	# 		action = agent.act(state,ent_max = 200)
+	# 		print("")
+	# 		print(counter)
+	# 		print(state)
+	# 		print(action)
+	# 		success, new_state, reward, done = env.step(action)
+	# 		config_plot(agent.belief_state[:,0,:,0],r'\textbf{Action: %i}'%(counter+1))
+	# 		# plt.savefig('Action'+str(counter+1)+'.eps')
+	# 		# print("Information update")
+	# 		agent.update_policy_info(state,success)
+	# 		state = new_state
+	# 		counter += 1
+	# 	print("Steps: ", counter)
+	# 	# x = input("")
+	# 	agent.save_graph()
 	1/0
 
 

@@ -31,13 +31,13 @@ from matplotlib import pyplot as plt
         #self.net = nn.Sequential(*[nn.Sequential(nn.Linear(layers[i])) for i in range(1, len(layers))])
 
 BUFFER_SIZE = int(1e5)  #replay buffer size
-BATCH_SIZE = 16         # minibatch size
+BATCH_SIZE = 64         # minibatch size
 GAMMA = 0.99            # discount factor
-TAU = 1e-2              # for soft update of target parameters
+TAU = 1e-3              # for soft update of target parameters
 
-LR = 3e-4               # learning rate
+LR = 5e-4               # learning rate
 TAU = LR
-UPDATE_EVERY = 2        # how often to update the network
+UPDATE_EVERY = 4        # how often to update the network
 
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -313,7 +313,6 @@ class Agent():
             labels = rewards.unsqueeze(1) + (gamma* labels_next*(1-dones.unsqueeze(1)))
 
             loss = criterion(predicted_targets,labels).to(device)
-            # print(loss.item())
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
@@ -358,7 +357,6 @@ class Agent():
         # import pdb; pdb.set_trace()
         batch = Batch.from_data_list([Data(x=xs[i], edge_index=self.edge_index, edge_attr=edge_attrs[i]) for i in range(xs.shape[0])])
         # data = Data(x=x, edge_index = self.edge_index)
-        batch.to(device)
         return(batch)
 
             
@@ -390,6 +388,9 @@ class ReplayBuffer:
         """Add a new experience to memory."""
         e = self.experiences(state,action,reward,next_state,done)
         self.memory.append(e)
+
+    def buffer_ep_add(self,state, action, reward, next_state,done,t):
+        if
         
     def sample(self):
         """Randomly sample a batch of experiences from memory"""
@@ -425,7 +426,7 @@ class ReplayBuffer:
 
 
 
-def dqn(agent,n_train_envs,n_episodes= 200, max_t = 100, eps_start=1.0, eps_end = 0.01,
+def dqn(agent,n_train_envs,n_episodes= 200, max_t = 1000, eps_start=1.0, eps_end = 0.01,
        eps_decay=0.999):
     # print(n_episodes)
     """Deep Q-Learning
@@ -442,18 +443,9 @@ def dqn(agent,n_train_envs,n_episodes= 200, max_t = 100, eps_start=1.0, eps_end 
     scores = [] # list containing score from each episode
     scores_window = deque(maxlen=50) # last 100 scores
     eps = eps_start
-    total_actions = 0
     for i_episode in range(1, n_episodes+1):
 
-        env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = 2,return_state_mode='mf',randomize_config=False)
-        locations = np.array([[24.0653,-7.0341,-1,-0.0239],
-                              [18.0313,-7.2389,-1,-0.0230],
-                              [10.4267,-6.9789,-1,-0.0187],
-                              [11.4360,0.7323,0.0090,-1],
-                              [11.4134,7.5497,0.0568,-0.9984]])
-        env.set_locations(locations)
-        # env = PuzzleBoxEnv.CompEnv()
-
+        env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = np.random.choice(np.arange(n_train_envs)),return_state_mode='mf',randomize_config=True)
         _,state,_,_ = env.reset()
         score = 0
         for t in range(max_t):
@@ -470,75 +462,22 @@ def dqn(agent,n_train_envs,n_episodes= 200, max_t = 100, eps_start=1.0, eps_end 
             ## replay buffer.
             state = next_state
             score += reward
-            total_actions += 1
-            if total_actions %120==0:
-                quick_eval(agent,8,eps)
             if done:
                 break
-            if total_actions > 120*5:
-                break
-        if total_actions > 120*5:
-            torch.save(agent.qnetwork_local.state_dict(),'Real_Robot_DQN_Model.pth')
-            break
         scores_window.append(score) ## save the most recent score
         scores.append(score) ## save the most recent score
         eps = max(eps*eps_decay,eps_end)## decrease the epsilon
         print('\rEpisode {}\tAverage Score {:.2f}\t epsilon {:.2f}'.format(i_episode,np.mean(scores_window),eps), end="")
-        if i_episode %40==0:
+        if i_episode %50==0:
             print('\rEpisode {}\tAverage Score {:.2f}\t epsilon {:.2f}'.format(i_episode,np.mean(scores_window),eps))
             
             torch.save(agent.qnetwork_local.state_dict(),'checkpoint.pth')
-        
                 
     return scores
 
-def quick_eval(agent,eps,env_index = 8, locations = None):
-    total_score = 0
-    if not np.any(locations):
-        locations = np.array([[23.0993,-0.1519,0.6930,0.7210],
-                              [16.5110,-4.7502,0.6710,-0.7415],
-                              [12.8176,-9.8099,0.0359,-0.9993],
-                              [10.6856,-4.1045,0.0253,-1.0000],
-                              [11.1199,1.9743,0.0763,-0.9971],])
-    for i in range(5):
-        env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = env_index,return_state_mode='mf',randomize_config=False)
-        env.set_locations(locations)
-        # env = PuzzleBoxEnv.CompEnv()
-
-        _,state,_,_ = env.reset()
-        score = 0
-        for t in range(200):
-            action = agent.act(state,eps)
-            _,next_state,reward,done = env.step(action)
-            # print("next_state")
-            # print(next_state.shape)
-
-            # agent.step(state,action,reward,next_state,done,t)
-            ## above step decides whether we will train(learn) the network
-            ## actor (local_qnetwork) or we will fill the replay buffer
-            ## if len replay buffer is equal to the batch size then we will
-            ## train the network or otherwise we will add experience tuple in our 
-            ## replay buffer.
-            state = next_state
-            score += reward
-            if done:
-                break
-        print(t+1)
-        total_score += np.min([t+1,30])
-
-    print(total_score/5)
-
-
 def main():
-    agent = Agent(state_size=35,action_size=5,seed=2,meta_learn_k = 1,loadpath='models/DQNModel92000.pth',load = True)
-    # quick_eval(agent,.1)
-    locations = np.array([[24.0653,-7.0341,-1,-0.0239],
-                          [18.0313,-7.2389,-1,-0.0230],
-                          [10.4267,-6.9789,-1,-0.0187],
-                          [11.4360,0.7323,0.0090,-1],
-                          [11.4134,7.5497,0.0568,-0.9984]])
-    quick_eval(agent,.1,env_index = 2,locations = locations)
-    # scores= dqn(agent,1,n_episodes=2000, eps_end = .2, eps_decay = .9)
+    agent = Agent(state_size=35,action_size=5,seed=0,meta_learn_k = 5)
+    scores= dqn(agent,9,n_episodes=2000, eps_end = .2, eps_decay = .999)
 
     mean_scores = []
     for i in range(100,len(scores)):

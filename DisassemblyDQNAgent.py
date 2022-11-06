@@ -31,13 +31,13 @@ from matplotlib import pyplot as plt
         #self.net = nn.Sequential(*[nn.Sequential(nn.Linear(layers[i])) for i in range(1, len(layers))])
 
 BUFFER_SIZE = int(1e5)  #replay buffer size
-BATCH_SIZE = 16         # minibatch size
+BATCH_SIZE = 64         # minibatch size
 GAMMA = 0.99            # discount factor
-TAU = 1e-2              # for soft update of target parameters
+TAU = 1e-3              # for soft update of target parameters
 
-LR = 3e-4               # learning rate
-TAU = LR
-UPDATE_EVERY = 2        # how often to update the network
+LR = 5e-4               # learning rate
+# TAU = LR
+UPDATE_EVERY = 4        # how often to update the network
 
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -118,7 +118,7 @@ class QNetwork(nn.Module):
         # self.conv6 = GINConv(self.nn6, eps=2.0)
         # self.nn7 = MLPB()
         # F_x = 2, F_e = 4
-        self.conv1 = MetaLayer(EdgeModel(F_x = 7, F_e = 4),NodeModel(F_x = 7, F_e = 64))
+        self.conv1 = MetaLayer(EdgeModel(F_x = 10, F_e = 9),NodeModel(F_x = 10, F_e = 64))
         # F_x = 64, F_e = 64
         self.conv2 = MetaLayer(EdgeModel(F_x = 64, F_e = 64),NodeModel(F_x = 64, F_e = 64))
         # F_x = 64, F_e = 64
@@ -210,13 +210,13 @@ class Agent():
             self.qnetwork_target.train()
 
 
-        xx, yy = np.meshgrid(np.arange(5),np.arange(5))
+        xx, yy = np.meshgrid(np.arange(self.state_size),np.arange(self.state_size))
         
         edge_index = np.vstack((xx.flatten(),yy.flatten())).astype(int)
 
         ixs = []
-        for i in range(5):
-            for j in range(5):
+        for i in range(self.state_size):
+            for j in range(self.state_size):
                 if i != j:
                     ixs.append([i, j])
         ixs = torch.as_tensor(ixs, dtype=torch.long)
@@ -345,12 +345,12 @@ class Agent():
         # goal = state[:, 30:35].view(-1, 5, 1)
         # print(state.shape)
         # print(state.shape)
-        xs = state[:,:35]
-        edge_attrs = state[:,35:]
+        xs = state[:,:self.state_size*10]
+        edge_attrs = state[:,self.state_size*10:]
         # print(edge_attrs.shape)
         # print(xs.shape)
-        xs = xs.view(-1,7,5).transpose(1,2)
-        edge_attrs = edge_attrs.view(-1,20,4)
+        xs = xs.view(-1,10,self.state_size).transpose(1,2)
+        edge_attrs = edge_attrs.view(-1,self.state_size*(self.state_size-1),9)
         # xs = torch.cat([history, ids, goal], dim=-1)
         # import pdb;pdb.set_trace()
         # print(x.shape)
@@ -425,7 +425,7 @@ class ReplayBuffer:
 
 
 
-def dqn(agent,n_train_envs,n_episodes= 200, max_t = 100, eps_start=1.0, eps_end = 0.01,
+def dqn(agent,n_train_envs,n_episodes= 200, max_t = 1000, eps_start=1.0, eps_end = 0.01,
        eps_decay=0.999):
     # print(n_episodes)
     """Deep Q-Learning
@@ -441,18 +441,12 @@ def dqn(agent,n_train_envs,n_episodes= 200, max_t = 100, eps_start=1.0, eps_end 
     """
     scores = [] # list containing score from each episode
     scores_window = deque(maxlen=50) # last 100 scores
+    ep_len_window = deque(maxlen=50)
     eps = eps_start
-    total_actions = 0
     for i_episode in range(1, n_episodes+1):
 
-        env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = 2,return_state_mode='mf',randomize_config=False)
-        locations = np.array([[24.0653,-7.0341,-1,-0.0239],
-                              [18.0313,-7.2389,-1,-0.0230],
-                              [10.4267,-6.9789,-1,-0.0187],
-                              [11.4360,0.7323,0.0090,-1],
-                              [11.4134,7.5497,0.0568,-0.9984]])
-        env.set_locations(locations)
-        # env = PuzzleBoxEnv.CompEnv()
+        # env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = np.random.choice(np.arange(n_train_envs)),return_state_mode='mf',randomize_config=True)
+        env = PuzzleBoxEnv.CompEnv(return_state_mode = 'mf',timeout=200, randomize_config=False)
 
         _,state,_,_ = env.reset()
         score = 0
@@ -470,75 +464,23 @@ def dqn(agent,n_train_envs,n_episodes= 200, max_t = 100, eps_start=1.0, eps_end 
             ## replay buffer.
             state = next_state
             score += reward
-            total_actions += 1
-            if total_actions %120==0:
-                quick_eval(agent,8,eps)
             if done:
                 break
-            if total_actions > 120*5:
-                break
-        if total_actions > 120*5:
-            torch.save(agent.qnetwork_local.state_dict(),'Real_Robot_DQN_Model.pth')
-            break
         scores_window.append(score) ## save the most recent score
         scores.append(score) ## save the most recent score
+        ep_len_window.append(t)
         eps = max(eps*eps_decay,eps_end)## decrease the epsilon
-        print('\rEpisode {}\tAverage Score {:.2f}\t epsilon {:.2f}'.format(i_episode,np.mean(scores_window),eps), end="")
-        if i_episode %40==0:
-            print('\rEpisode {}\tAverage Score {:.2f}\t epsilon {:.2f}'.format(i_episode,np.mean(scores_window),eps))
+        print('\rEpisode {}\tAverage Score {:.2f}\t epsilon {:.2f} \t episode length {:.2f}'.format(i_episode,np.mean(scores_window),eps,np.mean(ep_len_window)), end="")
+        if i_episode %50==0:
+            print('\rEpisode {}\tAverage Score {:.2f}\t epsilon {:.2f} \t episode length {:.2f}'.format(i_episode,np.mean(scores_window),eps,np.mean(ep_len_window)))
             
             torch.save(agent.qnetwork_local.state_dict(),'checkpoint.pth')
-        
                 
     return scores
 
-def quick_eval(agent,eps,env_index = 8, locations = None):
-    total_score = 0
-    if not np.any(locations):
-        locations = np.array([[23.0993,-0.1519,0.6930,0.7210],
-                              [16.5110,-4.7502,0.6710,-0.7415],
-                              [12.8176,-9.8099,0.0359,-0.9993],
-                              [10.6856,-4.1045,0.0253,-1.0000],
-                              [11.1199,1.9743,0.0763,-0.9971],])
-    for i in range(5):
-        env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = env_index,return_state_mode='mf',randomize_config=False)
-        env.set_locations(locations)
-        # env = PuzzleBoxEnv.CompEnv()
-
-        _,state,_,_ = env.reset()
-        score = 0
-        for t in range(200):
-            action = agent.act(state,eps)
-            _,next_state,reward,done = env.step(action)
-            # print("next_state")
-            # print(next_state.shape)
-
-            # agent.step(state,action,reward,next_state,done,t)
-            ## above step decides whether we will train(learn) the network
-            ## actor (local_qnetwork) or we will fill the replay buffer
-            ## if len replay buffer is equal to the batch size then we will
-            ## train the network or otherwise we will add experience tuple in our 
-            ## replay buffer.
-            state = next_state
-            score += reward
-            if done:
-                break
-        print(t+1)
-        total_score += np.min([t+1,30])
-
-    print(total_score/5)
-
-
 def main():
-    agent = Agent(state_size=35,action_size=5,seed=2,meta_learn_k = 1,loadpath='models/DQNModel92000.pth',load = True)
-    # quick_eval(agent,.1)
-    locations = np.array([[24.0653,-7.0341,-1,-0.0239],
-                          [18.0313,-7.2389,-1,-0.0230],
-                          [10.4267,-6.9789,-1,-0.0187],
-                          [11.4360,0.7323,0.0090,-1],
-                          [11.4134,7.5497,0.0568,-0.9984]])
-    quick_eval(agent,.1,env_index = 2,locations = locations)
-    # scores= dqn(agent,1,n_episodes=2000, eps_end = .2, eps_decay = .9)
+    agent = Agent(state_size=8,action_size=8,seed=0,meta_learn_k = 1)
+    scores= dqn(agent,1,n_episodes=2000, eps_end = .2, eps_decay = .999)
 
     mean_scores = []
     for i in range(100,len(scores)):
