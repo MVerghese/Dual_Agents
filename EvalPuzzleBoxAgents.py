@@ -613,6 +613,8 @@ def plot_ep_gen(N = 50,alpha = .5,thresh = 10):
 	dual_scores = np.load("ep_gen_dual_scores.npy")*-1
 	dual_thresh = np.sum(dual_scores < thresh,axis=1).flatten()/150
 	dual_eps = np.load("ep_gen_dual_eps.npy")
+	dual_thresh = np.append(dual_thresh,1.)
+	dual_eps = np.append(dual_eps,750.)
 
 	mf_scores = np.load("ep_gen_mf_scores.npy")*-1
 	mf_thresh = np.sum(mf_scores < thresh,axis=1).flatten()/150
@@ -670,8 +672,11 @@ def plot_comp_ep_gen(N = 50,alpha = .5,thresh = 10):
 	dual_scores = np.load("dis_ep_gen_dual_scores.npy")*-1
 	dual_thresh = np.sum(dual_scores < thresh,axis=1).flatten()/50
 	dual_eps = np.load("dis_ep_gen_dual_eps.npy")
+	dual_eps = np.append(dual_eps,750.)
+	dual_thresh = np.append(dual_thresh,1.)
 	print(thresh)
 	print(dual_thresh)
+	print(dual_eps)
 
 	mf_scores = np.load("dis_ep_gen_mf_scores.npy")
 	mf_thresh = np.sum(mf_scores < thresh,axis=1).flatten()/50
@@ -1045,8 +1050,8 @@ def main():
 	# print(np.sum(mb_scores <= 22,axis=1).flatten()/50)
 	# # 1/0
 
-	plot_comp_ep_gen(thresh = 24)
-	# plot_ep_gen(thresh = 15)
+	# plot_comp_ep_gen(thresh = 24)
+	plot_ep_gen(thresh = 15)
 
 	# plot_real()
 
