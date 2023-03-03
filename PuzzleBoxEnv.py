@@ -3,8 +3,8 @@ import time
 from matplotlib import pyplot as plt
 from matplotlib import rc,rcParams
 
-import gym
-from gym import spaces
+# import gym
+# from gym import spaces
 
 door_rad = 2
 bar_rad = 4

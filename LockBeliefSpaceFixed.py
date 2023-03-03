@@ -394,8 +394,8 @@ def dual_policy(belief_state,current_state,state_hash,prev_action,**kwargs):
 	# if prev_action >= 0:
 	# 	action_probs[prev_action] = 0
 	action = argmax(action_probs)
-	if current_state[0] == 1 and current_state[1] == 1 and action == 0:
-		print("Clause")
+	# if current_state[0] == 1 and current_state[1] == 1 and action == 0:
+	# 	print("Clause")
 	# print(action_probs)
 	return(action,action_probs)
 
@@ -865,14 +865,16 @@ class Structured_Agent:
 		self.prior_cids.append(self.cids)
 
 
-def train_agent(agent,num_train_envs,eps_per_env = 1,env_type = 'train'):
+def train_agent(agent,num_train_envs,eps_per_env = 1,env_type = 'train',dump_graphs=False):
+	print("Training agent...")
 	train_counts = np.zeros((eps_per_env,num_train_envs))
 	# print(num_train_envs)
 	for ep in range(eps_per_env):
+		print("ep: ",ep)
 		for i in range(num_train_envs):
-			env = PuzzleBoxEnv.CompEnv(env_index = i,jamming=0.0)
+			env = PuzzleBoxEnv.LockEnv('train',5,2,env_index = i,env_permutation=ep)
 			# print(env.get_object_ids())
-			agent.init_policy(8,env.get_object_ids(),env.get_component_locations(),env.get_goal_state(),use_priors = False)
+			agent.init_policy(5,env.get_object_ids(),env.get_component_locations(),env.get_goal_state(),use_priors = False)
 			# print(env.get_component_locations())
 			success, state, reward, done = env.reset()
 			counter = 0
@@ -884,6 +886,9 @@ def train_agent(agent,num_train_envs,eps_per_env = 1,env_type = 'train'):
 				counter += 1
 			train_counts[ep,i] = counter
 			agent.save_graph()
+	if dump_graphs:
+		agent.dump_graphs()
+
 	return(np.mean(train_counts,axis=0))
 
 
@@ -1048,7 +1053,10 @@ def config_plot(config,title):
 
 def main():
 	np.random.seed(1)
-	# agent = Structured_Agent_Dist(8,dim=3)
+	agent = Structured_Agent_Dist(5,dim=2)
+	train_agent(agent,9,eps_per_env=20,dump_graphs=True)
+	1/0
+
 
 	# for i in [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]:
 	# 	env = PuzzleBoxEnv.CompEnv(env_index = i,jamming=0.0)
